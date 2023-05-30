@@ -1,6 +1,6 @@
 config.json
-qabot.db
-qabot.db.*
+requestbot.db
+requestbot.db.*
 logs/*
 logs/.*
 sql/9*
