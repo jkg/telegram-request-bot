@@ -1,0 +1,6 @@
+config.json
+qabot.db
+qabot.db.*
+logs/*
+logs/.*
+sql/9*
