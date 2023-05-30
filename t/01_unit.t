@@ -80,7 +80,9 @@ subtest 'dispatching' => sub {
             telegram_id => 666,
             telegram_username => 'Charlie',
             banned => 0,
-            administrator => 0
+            admin => 0,
+            privacy_contact => 0,
+            seen_intro => 0,
         }, 'created a reasonable looking record for a new user';
 
     };
@@ -186,12 +188,12 @@ subtest 'testing forward_and_reply' => sub {
         );
 
         $sent = 0;
-        my $q_count = ResultSet('Question')->count;
+        my $q_count = ResultSet('Request')->count;
 
         my $reply = $bot->_forward_and_reply( $msg, ResultSet('User')->find(4) );
         like $reply, qr/Sorry Dave/, 'Bot dislikes the banned user';
         is $sent, 0, "...and doesn't relay their message";
-        is ResultSet('Question')->count, $q_count, "...nor store it in the DB";
+        is ResultSet('Request')->count, $q_count, "...nor store it in the DB";
 
     };
 
@@ -201,7 +203,7 @@ subtest 'testing forward_and_reply' => sub {
                 id => 23,
                 username => 'Bob'
             ),
-            text => q{question we want to actually store},
+            text => q{request we want to actually store},
         );
 
         my $user = ResultSet('User')->find(2);
@@ -210,13 +212,13 @@ subtest 'testing forward_and_reply' => sub {
         my $reply = $bot->_forward_and_reply( $msg, $user );
         like $reply, qr/thanks again/, 'Bot replied appropriately to a normal message';
 
-        ok my $q = ResultSet('Question')->find(
-            {text => 'question we want to actually store'}
-        ) => 'the question made it into the db';
+        ok my $q = ResultSet('Request')->find(
+            {text => 'request we want to actually store'}
+        ) => 'the request made it into the db';
 
-        is $q->sender->id, 2, 'Attributed the question to the right user';
+        is $q->sender->id, 2, 'Attributed the request to the right user';
 
-        is $sent, 1, '...and sent the question to the target chat';
+        is $sent, 1, '...and sent the request to the target chat';
     };
 
     $mock_bot->reset('sendMessage'); # put it back how we found it
@@ -257,11 +259,11 @@ subtest 'admin-only commands' => sub {
 
     };
 
-    subtest 'basic question management' => sub {
+    subtest 'basic request management' => sub {
 
-        ResultSet('Question')->update({ responded => 1 });
+        ResultSet('Request')->update({ responded => 1 });
 
-        my $q = ResultSet('Question')->create({
+        my $q = ResultSet('Request')->create({
             sender => 1,
             text => q{This is a story, all about how},
             received => 1679700000,
@@ -270,7 +272,7 @@ subtest 'admin-only commands' => sub {
 
         my $qid1 = $q->id;
 
-        $q = ResultSet('Question')->create({
+        $q = ResultSet('Request')->create({
             sender => 2,
             text => q{My life got flipped, turned upside down},
             received => 1679703600,
@@ -287,7 +289,7 @@ subtest 'admin-only commands' => sub {
         my $reply = $bot->_admin_command( $msg, $db_admin_user, 'unanswered' );
 
         my $expected = <<EOF;
-Here are the unanswered questions:
+Here are the unanswered requests:
 
 Message # $qid1 from \@alice, at 24 Mar, 11:20 PM
 This is a story, all about how
@@ -296,24 +298,24 @@ Message # $qid2 from \@bob, at 25 Mar, 12:20 AM
 My life got flipped, turned upside down
 EOF
 
-        is "$reply\n", $expected, 'Correctly lists two whole questions';
+        is "$reply\n", $expected, 'Correctly lists two whole requests';
         # heredoc has to terminate with newline, real response does not.
 
         $msg = _new_msg(
-            text => "/showquestion_$qid1",
+            text => "/showrequest_$qid1",
             from => $admin_user
         );
 
-        $reply = $bot->_admin_command( $msg, $db_admin_user, 'showquestion', $qid1 );
+        $reply = $bot->_admin_command( $msg, $db_admin_user, 'showrequest', $qid1 );
 
         $expected = <<EOF;
-Question $qid1 from \@alice received on 24 Mar, 11:20 PM
+Request $qid1 from \@alice received on 24 Mar, 11:20 PM
 This is a story, all about how
 
 To mark as resolved, send /answer_$qid1
 EOF
 
-        is "$reply\n", $expected, 'Correctly prints the specified question';
+        is "$reply\n", $expected, 'Correctly prints the specified request';
 
         $msg = _new_msg(
             text => "/answer_$qid1",
@@ -322,18 +324,18 @@ EOF
 
         $reply = $bot->_admin_command( $msg, $db_admin_user, 'answer', $qid1 );
 
-        is ResultSet('Question')->find($qid1)->responded, 1,
-            q{question gets marked as resolved};
+        is ResultSet('Request')->find($qid1)->responded, 1,
+            q{request gets marked as resolved};
 
-        like $reply, qr/marked question \d+ as resolved/,
+        like $reply, qr/marked request \d+ as resolved/,
             q{...and the admin-user is correctly informed};
 
     };
 
     subtest 'nothing to answer' => sub {
 
-        # all questions are answered
-        $bot->schema->resultset('Question')->update({responded => 1 });
+        # all requests are answered
+        ResultSet('Request')->update({responded => 1 });
 
         my $msg = _new_msg(
             text => '/unanswered',
@@ -343,18 +345,18 @@ EOF
         like $bot->_admin_command( $msg, $db_admin_user, 'unanswered' )
             => qr/good work team/, 'Bot is happy when everything is answered';
 
-        $bot->schema->resultset('Question')->delete;
+        $bot->schema->resultset('Request')->delete;
 
         like $bot->_admin_command( $msg, $db_admin_user, 'unanswered' )
             => qr/good work team/, '.. and when nothing was ever asked';
 
         $msg = _new_msg(
-            text => '/showquestion_10000',
+            text => '/showrequest_10000',
             from => $admin_user
         );
 
-        like $bot->_admin_command( $msg, $db_admin_user, 'showquestion', 10_000 )
-            => qr/couldn't find question/, '... and copes with invalid question ids';
+        like $bot->_admin_command( $msg, $db_admin_user, 'showrequest', 10_000 )
+            => qr/couldn't find request/, '... and copes with invalid request ids';
 
         $msg = _new_msg(
             text => '/answer_100',
@@ -362,7 +364,7 @@ EOF
         );
 
         like $bot->_admin_command( $msg, $db_admin_user, 'answer', 100 )
-            => qr/no such question/, '... including when trying to answer them';
+            => qr/no such request/, '... including when trying to answer them';
 
     };
 
@@ -378,12 +380,12 @@ EOF
 
     };
 
-    subtest 'emoji bug in question recall' => sub {
+    subtest 'emoji bug in request recall' => sub {
 
         my $bot = _new_bot();
 
 
-        my $q = ResultSet('Question')->create({
+        my $q = ResultSet('Request')->create({
             sender => 1,
             text => q{💙🐸🍟🕌},
             received => time(),
@@ -391,13 +393,13 @@ EOF
         });
 
         my $msg = _new_msg(
-            text => '/showquestion_' . $q->id,
+            text => '/showrequest_' . $q->id,
             from => $admin_user
         );
 
-        my $reply = $bot->_admin_command($msg, $db_admin_user, 'showquestion', $q->id);
+        my $reply = $bot->_admin_command($msg, $db_admin_user, 'showrequest', $q->id);
 
-        like $reply, qr{💙🐸🍟🕌}, "Bot correctly displays emoji in questions";
+        like $reply, qr{💙🐸🍟🕌}, "Bot correctly displays emoji in requests";
 
     };
 

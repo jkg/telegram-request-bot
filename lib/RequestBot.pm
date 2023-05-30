@@ -15,7 +15,7 @@ RequestBot - a simple "ticketing" bot, for Telegram
 
 =head1 DESCRIPTION
 
-This is a Telegram bot that collects user questions/requests and forwards
+This is a Telegram bot that collects user requests and forwards
 them into a designated group chat, where its administrative users can track
 them, process them and then respond to the requestor when appropriate.
 
@@ -155,7 +155,7 @@ sub _dispatch {
         return;
     }
 
-    # finally, looks like an actual user question! so let's process it
+    # finally, looks like an actual user request! so let's process it
     else {
         $reply = $self->_forward_and_reply($update, $sender);
     }
@@ -184,12 +184,7 @@ sub _forward_and_reply {
     my $reply  = '';
 
     if ( $sender->banned ) {
-
-        if ( defined my $str = $schema->resultset('String')->find('banned_user') ) {
-            return $str->string_en;
-        }
-        return "Gerrout, yer bard!";
-
+        return $self->schema->resultset('String')->find('banned')->string_en;
     }
 
     my $response_type =
@@ -203,7 +198,7 @@ sub _forward_and_reply {
     };
 
     try {
-        $schema->resultset('Question')->create(
+        $schema->resultset('Request')->create(
             {   sender   => $sender->id,
                 text     => $update->text,
                 received => DateTime->now->epoch,
@@ -215,8 +210,7 @@ sub _forward_and_reply {
           .= $schema->resultset('String')->find($response_type)->string_en;
 
         $sender->seen_intro(1);
-    }
-    catch {
+    } catch {
         $self->logger->error( "Crashed during forward-and-reply: $_" );
         $reply = "Something crazy happened, sorry";
     };
@@ -244,35 +238,35 @@ sub _admin_command {
 
     return
       "Sorry, did you need some /help? Many of my features are only for my special minions, because they give me chips."
-      unless ( defined $sender and $sender->administrator );
+      unless ( defined $sender and $sender->admin );
 
     if ( $command eq 'unanswered' ) {
 
-        # show unanswered questions
+        # show unanswered requests
 
-        my @questions = $schema->resultset('Question')->search(
+        my @requests = $schema->resultset('Request')->search(
             { responded => 0 },
             {   prefetch => 'sender',
                 order_by => [qw| sender received |],
             },
 
-            # if we order by sender first, we will get related questions
+            # if we order by sender first, we will get related requests
             # together, in theory...
-            # older sender IDs are likely to have asked their questions
+            # older sender IDs are likely to have sent their first requests
             # earlier so it doesn't break the "obvious" ordering too much.
         );
 
         return
           "Looks like everything's been answered, good work team! Let's go get some chips... well, you get some, I'll steal yours?"
-          unless @questions;
+          unless @requests;
 
-        my $max_q_length = int( 1000 / scalar @questions );
+        my $max_q_length = int( 1000 / scalar @requests );
 
         # truncate the messages to keep the message length sane
 
-        my @reply_parts = ("Here are the unanswered questions:");
+        my @reply_parts = ("Here are the unanswered requests:");
 
-        for my $q (@questions) {
+        for my $q (@requests) {
             my $sender_display = '@' . $q->sender->telegram_username;
             my $date_display   = DateTime->from_epoch( epoch => $q->received )
               ->format_cldr("d MMM, h:mm a");
@@ -290,14 +284,14 @@ sub _admin_command {
 
         return join "\n\n", @reply_parts;
     }
-    elsif ( $command eq 'showquestion' ) {
-        my $q = $schema->resultset('Question')->find( $id );
+    elsif ( $command eq 'showrequest' ) {
+        my $q = $schema->resultset('Request')->find( $id );
 
-        return "Sorry, couldn't find question $id in my database!"
+        return "Sorry, couldn't find request $id in my database!"
           unless defined $q;
 
         my $reply =
-            "Question $id from @"
+            "Request $id from @"
           . $q->sender->telegram_username
           . " received on "
           . DateTime->from_epoch( epoch => $q->received )
@@ -311,17 +305,17 @@ sub _admin_command {
     }
     elsif ( $command eq 'answer' ) {
 
-        # mark question as resolved
-        my $q = $schema->resultset('Question')->find($id);
+        # mark request as resolved
+        my $q = $schema->resultset('Request')->find($id);
 
-        return "Sorry, no such question" unless defined $q;
+        return "Sorry, no such request" unless defined $q;
 
         return try {
             $q->update( { responded => 1 } );
-            return "OK, I marked question $id as resolved";
+            return "OK, I marked request $id as resolved";
         }
         catch {
-            $self->logger->error( "Failed to mark question as answered: $_" );
+            $self->logger->error( "Failed to mark request as answered: $_" );
             return "Sorry, something went wrong trying to update the database";
         };
     }

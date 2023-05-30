@@ -15,5 +15,8 @@
         [
             'privacy', 'blah Privacy Policy blah',
         ],
+        [
+            'banned', 'Sorry Dave, I am afraid I cannot do that',
+        ],
     ],
 ];
