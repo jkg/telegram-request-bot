@@ -6,7 +6,7 @@ use URI::Encode qw|uri_encode|;
 
 use Log::Dispatch;
 
-use QABot::Schema;
+use RequestBot::Schema;
 use Try::Tiny;
 
 =head1 NAME
@@ -230,7 +230,7 @@ Handles all admin commands, including database storage as well as the response
 to the user. Arguments are
 
 * C<$update> the L<Telegram::Bot::Message> object we have received
-* C<$sender>, a L<QABot::Schema::Result::User> associated with the message
+* C<$sender>, a L<RequestBot::Schema::Result::User> associated with the message
 * C<$command> the command we're running
 * C<$id> an optional ID for the command to operate on
 

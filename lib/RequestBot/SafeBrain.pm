@@ -2,7 +2,7 @@ package RequestBot::SafeBrain;
 
 =head1 NAME
 
-QABot::SafeBrain - because Telegram::Bot::Brain has a safety issue...
+RequestBot::SafeBrain - because Telegram::Bot::Brain has a safety issue...
 
 =cut
 

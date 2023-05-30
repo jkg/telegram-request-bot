@@ -1,15 +1,15 @@
 use strict;
 use warnings;
-use Test2::V0 -target => 'QABot';
+use Test2::V0 -target => 'RequestBot';
 use Test2::Tools::Mock qw/mock_accessors/;
 use Test::DBIx::Class {
-    schema_class => 'QABot::Schema',
+    schema_class => 'RequestBot::Schema',
     connect_info => [ 'dbi:SQLite:dbname=:memory:', '', '', {sqlite_unicode => 1} ],
 };
 use Telegram::Bot::Object::Chat ();
 use Telegram::Bot::Object::User ();
 
-my $mock_bot = mock 'QABot' => (
+my $mock_bot = mock 'RequestBot' => (
     track    => 1,
     override => [
         think => sub {return},
@@ -29,7 +29,7 @@ fixtures_ok 'strings';
 fixtures_ok 'user';
 
 subtest 'meta' => sub {
-    isa_ok $CLASS->new, 'QABot', 'Telegram::Bot::Brain';
+    isa_ok $CLASS->new, 'RequestBot', 'Telegram::Bot::Brain';
 };
 
 subtest 'dispatching' => sub {
