@@ -4,6 +4,8 @@ use Mojo::Base 'RequestBot::SafeBrain';
 use DateTime;
 use URI::Encode qw|uri_encode|;
 
+use Config::JSON;
+
 use Log::Dispatch;
 
 use RequestBot::Schema;
@@ -99,6 +101,7 @@ sub _dispatch {
     if ( defined $update->from ) {
         $sender = $self->schema->resultset('User')->find_or_create( telegram_id => $update->from->id );
         $sender->telegram_username( $update->from->username );
+        $sender->update;
     } else {
         return; # can this even be reached in the real world? happy to silently fail if no sender...
     }
@@ -107,11 +110,7 @@ sub _dispatch {
     my $reply;
 
     # first, the sanity checks
-    if ( defined $update->forward_from ) {
-        $reply = "Please don't forward messages to me, ask me yourself!";
-
-    }
-    elsif ( not defined $text ) {
+    if ( not defined $text ) {
         if ( $update->chat->type eq 'private' ) {
             # private chat, respond to tell them we didn't understand
             $reply = "Sorry, I can only deal in words, not attachments";
@@ -130,15 +129,19 @@ sub _dispatch {
     elsif ( $text =~ m|^/start| or $text =~ m|^/help| ) {
         $reply =
           $self->schema->resultset('String')->find('help')->string_en;
+
+        if ( $sender->admin ) {
+            $reply .= "\n\n" . $self->schema->resultset('String')->find('admin_help')->string_en;
+        }
     }
 
     elsif ( $text =~ m|^/privacy| ) {
         $reply =
             $self->schema->resultset('String')->find('privacy')->string_en;
-        $reply .= '\n\nIf necessary, you can contact @' . 
+        $reply .= "\n\nIf necessary, you can contact \@" .
             $self->schema->resultset('User')
                 ->search_rs({privacy_contact => 1})
-                ->first->tg_username
+                ->first->telegram_username
             . " to access your data, or to have it updated/removed";
     }
 
@@ -155,6 +158,11 @@ sub _dispatch {
         return;
     }
 
+    elsif ( defined $update->forward_from ) {
+        $reply = "Please don't forward messages to me, ask me yourself!";
+
+    }
+
     # finally, looks like an actual user request! so let's process it
     else {
         $reply = $self->_forward_and_reply($update, $sender);
@@ -163,8 +171,6 @@ sub _dispatch {
     if ($reply) {
         $update->reply($reply);
     }
-
-    $sender->update;
 
 }
 
@@ -190,20 +196,21 @@ sub _forward_and_reply {
     my $response_type =
       $sender->seen_intro ? 'receipt_general' : 'receipt_first';
 
-    my $msg = {
-        chat_id => $self->target_chat_id,
-        text    => 'Message from @'
-          . $update->from->username . "\n\n"
-          . $update->text,
-    };
-
     try {
-        $schema->resultset('Request')->create(
+        my $rq = $schema->resultset('Request')->create(
             {   sender   => $sender->id,
                 text     => $update->text,
                 received => DateTime->now->epoch,
             }
         );
+
+        my $msg = {
+            chat_id => $self->target_chat_id,
+            text    => 'Message from @'
+                . $update->from->username . "\n\n"
+                . $update->text . "\n\n"
+                . "Resolve using: /close_" . $rq->id
+        };
 
         $self->sendMessage($msg);
         $reply
@@ -215,6 +222,7 @@ sub _forward_and_reply {
         $reply = "Something crazy happened, sorry";
     };
 
+    $sender->update;
     return $reply;
 }
 
@@ -240,7 +248,7 @@ sub _admin_command {
       "Sorry, did you need some /help? Many of my features are only for my special minions, because they give me chips."
       unless ( defined $sender and $sender->admin );
 
-    if ( $command eq 'unanswered' ) {
+    if ( $command eq 'open' ) {
 
         # show unanswered requests
 
@@ -264,7 +272,7 @@ sub _admin_command {
 
         # truncate the messages to keep the message length sane
 
-        my @reply_parts = ("Here are the unanswered requests:");
+        my @reply_parts = ("Here are the unresolved requests:");
 
         for my $q (@requests) {
             my $sender_display = '@' . $q->sender->telegram_username;
@@ -299,11 +307,11 @@ sub _admin_command {
 
         $reply .= $q->text . "\n\n";
 
-        $reply .= "To mark as resolved, send /answer_" . $id;
+        $reply .= "To mark as resolved, send /close_" . $id;
 
         return $reply;
     }
-    elsif ( $command eq 'answer' ) {
+    elsif ( $command eq 'close' ) {
 
         # mark request as resolved
         my $q = $schema->resultset('Request')->find($id);
@@ -315,9 +323,146 @@ sub _admin_command {
             return "OK, I marked request $id as resolved";
         }
         catch {
-            $self->logger->error( "Failed to mark request as answered: $_" );
+            $self->logger->error( "Failed to mark request as closed: $_" );
             return "Sorry, something went wrong trying to update the database";
         };
+    }
+    elsif ( $command eq 'users' ) {
+
+        my @user_blocks;
+
+        my $rs = $schema->resultset('User')->search({ admin => 0, banned => 0 });
+
+        return "no non-admin, non-banned users found" unless $rs->count;
+
+        while ( my $user = $rs->next ) {
+            my $userid = $user->id;
+            my $tg_display = '@' . $user->telegram_username;
+
+            push @user_blocks, "$tg_display - /promote_$userid - /banhammer_$userid";
+        }
+
+        return "KNOWN USERS\n\n" . join("\n", @user_blocks) . "\n\nSee also: /admins, /banned";
+
+    }
+    elsif ( $command eq 'banned' ) {
+
+        my @user_blocks;
+        my $rs = $schema->resultset('User')->search({ banned => 1 });
+
+        return "no banned users found" unless $rs->count;
+
+        while ( my $user = $rs->next ) {
+            my $userid = $user->id;
+            my $tg_display = '@' . $user->telegram_username;
+
+            push @user_blocks, "$tg_display - /unban_$userid";
+        }
+
+        return "BANNED USERS\n\n" . join "\n", @user_blocks;
+
+    }
+    elsif ( $command eq 'admins' ) {
+
+        my @user_blocks;
+        my $rs = $schema->resultset('User')->search({admin => 1 });
+
+        return "no admin users found, but then, uh, how did you do that?" unless $rs->count;
+
+        while ( my $user = $rs->next ) {
+            my $userid = $user->id;
+            my $tg_display = '@' . $user->telegram_username;
+
+            push @user_blocks, "$tg_display - /demote_$userid";
+        }
+
+        return "CURRENT ADMINS\n\n" . join "\n", @user_blocks;
+
+    }
+    elsif ( $command eq 'promote' ) {
+
+        my $user = $schema->resultset('User')->find( $id );
+        return "no user with id $id found, sorry"
+            unless defined $user;
+
+        $user->admin(1);
+        $user->update;
+
+        my $msg = {
+            chat_id => $self->target_chat_id,
+            text    => "ADMIN PROMOTION!\n\n\@"
+                . $user->telegram_username . " has been promoted by \@"
+                . $update->from->username 
+                . "\n\nCheck the /admins list to see current admins"
+        };
+
+        $self->sendMessage($msg);
+
+        return 'OK, @' . $user->telegram_username . " is an admin, now";
+
+    }
+    elsif ( $command eq 'demote' ) {
+
+        return "this command is not yet implemented, please get someone to manually update the database";
+
+    }
+    elsif ( $command eq 'banhammer' ) {
+
+        my $user = $schema->resultset('User')->find( $id );
+        return "no user with id $id found, sorry"
+            unless defined $user;
+        
+        return "sorry, that user is too powerful to simple ban"
+            if $user->privacy_contact or $user->admin;
+
+        $user->banned(1);
+        $user->update;
+
+        return 'OK, @' . $user->telegram_username . " can't send me requests any more";
+
+    }
+    elsif ( $command eq 'unban' ) {
+
+        my $user = $schema->resultset('User')->find( $id );
+        return "no user with id $id found, sorry"
+            unless defined $user;
+        
+        $user->banned(0);
+        $user->update;
+
+        return 'OK, @' . $user->telegram_username . " is now unbanned";
+
+    }
+    elsif ( $command eq 'liveherenow' ) {
+
+        return "Sorry, that only works in groups"
+            if $update->chat->type eq 'private';
+
+        if ( $self->target_chat_id ) {
+            $self->sendMessage({
+                chat_id => $self->target_chat_id,
+                text => 'User @' . $sender->telegram_username . " has told me to communicate in a different chat, now"
+            });
+        }
+
+        my $reply;
+        try {
+
+            my $config = Config::JSON->new( 'config.json' );
+            $config->set( target_chat_id => $update->chat->id );
+
+            $self->target_chat_id( $update->chat->id );
+
+            $reply = "OK, I will communicate here, from now on!";
+
+        } catch {
+
+            $reply = "I couldn't update my config file, sorry";
+
+        };
+
+        return $reply;
+
     }
     else {
         return "Sorry, I didn't catch that, do you need /help?";
@@ -334,8 +479,6 @@ L<Telegram::Bot>
 =over
 
 =item James Green <jkg@earth.li>
-
-=item Julien Fiegehenn <simbabque@cpan.org>
 
 =cut
 

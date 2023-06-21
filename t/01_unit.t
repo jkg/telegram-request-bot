@@ -102,7 +102,11 @@ subtest 'dispatching' => sub {
     };
 
     subtest 'forwards are not supported' => sub {
-        my $msg = _new_msg( forward_from => 'someone else' );
+        my $msg = _new_msg( 
+            forward_from => 'someone else',
+            chat => _new_private_chat(),
+            text => 'just some text, you know'
+        );
 
         $bot->_dispatch($msg);
         like $msg->_reply, qr/don't forward/, 'Bot does not like forward';
@@ -174,9 +178,15 @@ subtest 'testing forward_and_reply' => sub {
     # let's override sendMessage so that we don't actually try and talk to
     # Telegram, but we can go a little deeper into _forward_and_reply
     my $sent = 0;
+    my $sent_text = '';
     $mock_bot->override(
         sendMessage => sub {
             ++$sent;
+            my $bot = shift;
+            my $msg = shift;
+            if ( defined $msg ) {
+                $sent_text = $msg->{text};
+            }
         }
     );
 
@@ -216,9 +226,13 @@ subtest 'testing forward_and_reply' => sub {
             {text => 'request we want to actually store'}
         ) => 'the request made it into the db';
 
+        my $close_command = '/close_' . $q->id;
+
         is $q->sender->id, 2, 'Attributed the request to the right user';
 
         is $sent, 1, '...and sent the request to the target chat';
+
+        like $sent_text, qr/$close_command/, "...and the target chat gets the correct resolution command";
     };
 
     $mock_bot->reset('sendMessage'); # put it back how we found it
@@ -282,14 +296,14 @@ subtest 'admin-only commands' => sub {
         my $qid2 = $q->id;
 
         my $msg = _new_msg(
-            text => '/unanswered',
+            text => '/open',
             from => $admin_user
         );
 
-        my $reply = $bot->_admin_command( $msg, $db_admin_user, 'unanswered' );
+        my $reply = $bot->_admin_command( $msg, $db_admin_user, 'open' );
 
         my $expected = <<EOF;
-Here are the unanswered requests:
+Here are the unresolved requests:
 
 Message # $qid1 from \@alice, at 24 Mar, 11:20 PM
 This is a story, all about how
@@ -312,17 +326,17 @@ EOF
 Request $qid1 from \@alice received on 24 Mar, 11:20 PM
 This is a story, all about how
 
-To mark as resolved, send /answer_$qid1
+To mark as resolved, send /close_$qid1
 EOF
 
         is "$reply\n", $expected, 'Correctly prints the specified request';
 
         $msg = _new_msg(
-            text => "/answer_$qid1",
+            text => "/close_$qid1",
             from => $admin_user
         );
 
-        $reply = $bot->_admin_command( $msg, $db_admin_user, 'answer', $qid1 );
+        $reply = $bot->_admin_command( $msg, $db_admin_user, 'close', $qid1 );
 
         is ResultSet('Request')->find($qid1)->responded, 1,
             q{request gets marked as resolved};
@@ -338,16 +352,16 @@ EOF
         ResultSet('Request')->update({responded => 1 });
 
         my $msg = _new_msg(
-            text => '/unanswered',
+            text => '/open',
             from => $admin_user
         );
 
-        like $bot->_admin_command( $msg, $db_admin_user, 'unanswered' )
+        like $bot->_admin_command( $msg, $db_admin_user, 'open' )
             => qr/good work team/, 'Bot is happy when everything is answered';
 
         $bot->schema->resultset('Request')->delete;
 
-        like $bot->_admin_command( $msg, $db_admin_user, 'unanswered' )
+        like $bot->_admin_command( $msg, $db_admin_user, 'open' )
             => qr/good work team/, '.. and when nothing was ever asked';
 
         $msg = _new_msg(
@@ -359,13 +373,85 @@ EOF
             => qr/couldn't find request/, '... and copes with invalid request ids';
 
         $msg = _new_msg(
-            text => '/answer_100',
+            text => '/close_100',
             from => $admin_user
         );
 
-        like $bot->_admin_command( $msg, $db_admin_user, 'answer', 100 )
-            => qr/no such request/, '... including when trying to answer them';
+        like $bot->_admin_command( $msg, $db_admin_user, 'close', 100 )
+            => qr/no such request/, '... including when trying to resolve them';
 
+    };
+
+    subtest 'user management' => sub {
+
+        my $msg = _new_msg(
+            from => $admin_user
+        );
+
+        my %list_tests = (
+            users => '@alice - /promote_1 - /banhammer_1',
+            admins => '@bob - /demote_2',
+            banned => '@moriarty - /unban_4',
+        );
+
+        for ( keys %list_tests ) {
+            my $expectation = $list_tests{$_};
+            like $bot->_admin_command( $msg, $db_admin_user, $_ )
+                => qr/$expectation/s, "/$_ command behaves as expected";
+        }
+
+        $mock_bot->override( sendMessage => sub {} );
+        # TODO: test that we call this, rather than just disabling it
+
+        like $bot->_admin_command( $msg, $db_admin_user, promote => 1 ),
+            => qr/is an admin/, "Promotion responds correctly";
+        is ResultSet('User')->find(1)->admin, 1, "And that user was promoted";
+
+        $mock_bot->reset( 'sendMessage' );
+
+        like $bot->_admin_command( $msg, $db_admin_user, banhammer => 1 ),
+            => qr/too powerful/i, "Banning an admin fails";
+        is ResultSet('User')->find(1)->banned, 0, "And user was not banned";
+
+        like $bot->_admin_command( $msg, $db_admin_user, unban => 4 ),
+            => qr/moriarty is now unbanned/i, "Unban responds correctly";
+        is ResultSet('User')->find(4)->banned, 0, "And the user was unbanned";
+
+        like $bot->_admin_command( $msg, $db_admin_user, banhammer => 4 ),
+            => qr/moriarty can't send me requests/i, "Banning responds correctly";
+        is ResultSet('User')->find(4)->banned, 1, "And the user was banned";
+
+    };
+
+    subtest 'changing target_chat_id' => sub {
+
+        my $sent = 0;
+        $mock_bot->override(
+            sendMessage => sub {
+                $sent++;
+            }
+        );
+
+        my $config_change_count = 0;
+        my $mock_config = mock 'Config::JSON' => (
+            track => 1,
+            override => [
+                set => sub { ++$config_change_count }
+            ]
+        );
+
+        my $msg = _new_msg(
+            from => $admin_user,
+            chat => _new_group_chat( id => 234 ),
+        );
+
+        like $bot->_admin_command( $msg, $db_admin_user, 'liveherenow' )
+            => qr/communicate here/, "Bot responds appropriately to target chat reset";
+
+        is $bot->target_chat_id, 234, "And it correctly updates the target chat";
+        is $sent, 1, "And it sends the old-chat notifications";
+        is $config_change_count, 1, "And it wrote to the config file";
+        
     };
 
     subtest 'unknown admin command' => sub {
