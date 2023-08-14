@@ -213,13 +213,14 @@ sub _forward_and_reply {
         };
 
         $self->sendMessage($msg);
+
         $reply
           .= $schema->resultset('String')->find($response_type)->string_en;
 
         $sender->seen_intro(1);
     } catch {
         $self->logger->error( "Crashed during forward-and-reply: $_" );
-        $reply = "Something crazy happened, sorry";
+        $reply = "Something went wrong while forwarding your message, sorry! It was (probably) saved, but nobody was notified yet.";
     };
 
     $sender->update;
@@ -439,10 +440,14 @@ sub _admin_command {
             if $update->chat->type eq 'private';
 
         if ( $self->target_chat_id ) {
-            $self->sendMessage({
-                chat_id => $self->target_chat_id,
-                text => 'User @' . $sender->telegram_username . " has told me to communicate in a different chat, now"
-            });
+            try {
+                $self->sendMessage({
+                    chat_id => $self->target_chat_id,
+                    text => 'User @' . $sender->telegram_username . " has told me to communicate in a different chat, now"
+                });
+            } catch {
+                $self->logger->error('Failed to notify old chat during /liveherenow command. Probably the ID is invalid (maybe the ID changed)');
+            };
         }
 
         my $reply;
