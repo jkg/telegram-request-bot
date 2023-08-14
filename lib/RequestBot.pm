@@ -1,6 +1,6 @@
 package RequestBot;
 
-use Mojo::Base 'RequestBot::SafeBrain';
+use Mojo::Base 'Telegram::Bot::Brain';
 use DateTime;
 use URI::Encode qw|uri_encode|;
 
