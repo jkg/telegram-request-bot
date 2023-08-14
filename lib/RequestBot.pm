@@ -255,7 +255,7 @@ sub _admin_command {
         my @requests = $schema->resultset('Request')->search(
             { responded => 0 },
             {   prefetch => 'sender',
-                order_by => [qw| sender received |],
+                order_by => [qw| received |],
             },
 
             # if we order by sender first, we will get related requests
