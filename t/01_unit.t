@@ -222,9 +222,13 @@ subtest 'testing forward_and_reply' => sub {
         my $reply = $bot->_forward_and_reply( $msg, $user );
         like $reply, qr/thanks again/, 'Bot replied appropriately to a normal message';
 
-        ok my $q = ResultSet('Request')->find(
+        my $q = ResultSet('Request')->find(
             {text => 'request we want to actually store'}
-        ) => 'the request made it into the db';
+        );
+        ok $q->id => 'the request made it into the db';
+
+        my $qid = $q->id;
+        like $reply, qr/ID is $qid/, '...and the user was told the ID';
 
         my $close_command = '/close_' . $q->id;
 
@@ -244,6 +248,19 @@ subtest 'admin-only commands' => sub {
     my $bot = _new_bot();
     my $admin_user = _user_from_tgid( 34 );
     my $db_admin_user = ResultSet('User')->find(3);
+
+    my $sent_text;
+    my $sent = 0;
+    $mock_bot->override(
+        sendMessage => sub {
+            ++$sent;
+            my $bot = shift;
+            my $msg = shift;
+            if ( defined $msg ) {
+                $sent_text = $msg->{text};
+            }
+        }
+    );
 
     subtest 'non-admin user' => sub {
         my $msg = _new_msg(
@@ -336,13 +353,19 @@ EOF
             from => $admin_user
         );
 
+        $sent_text = ''; # make sure this is empty beforehand
+        $sent = 0; # and this
+
         $reply = $bot->_admin_command( $msg, $db_admin_user, 'close', $qid1 );
 
         is ResultSet('Request')->find($qid1)->responded, 1,
             q{request gets marked as resolved};
 
-        like $reply, qr/marked request \d+ as resolved/,
+        like $reply, qr/marked request $qid1 as resolved/,
             q{...and the admin-user is correctly informed};
+
+        like $sent_text, qr/ID $qid1/,
+            q{...and the requestor is correctly informed too!};
 
     };
 

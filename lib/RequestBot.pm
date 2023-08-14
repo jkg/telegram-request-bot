@@ -215,7 +215,8 @@ sub _forward_and_reply {
         $self->sendMessage($msg);
 
         $reply
-          .= $schema->resultset('String')->find($response_type)->string_en;
+          .= $schema->resultset('String')->find($response_type)->string_en
+            . "\n\nYour request ID is " . $rq->id;
 
         $sender->seen_intro(1);
     } catch {
@@ -319,14 +320,38 @@ sub _admin_command {
 
         return "Sorry, no such request" unless defined $q;
 
-        return try {
+        my $reply;
+        try {
             $q->update( { responded => 1 } );
-            return "OK, I marked request $id as resolved";
+
+            $reply = "OK, I marked request $id as resolved";
         }
         catch {
             $self->logger->error( "Failed to mark request as closed: $_" );
             return "Sorry, something went wrong trying to update the database";
         };
+
+        # and let the requestor know
+
+        my $msg = {
+            chat_id => $q->sender->telegram_id,
+            text    => "One of the team has marked your request ID $id as resolved"
+                . "\n\nIf you still need assistance or updates, please raise a new request."
+        };
+
+        use DDP; p $msg;
+
+        try {
+            warn "we are in the try block";
+            $self->sendMessage($msg);
+            warn "TODO: called sendMessage, whatever the test suite thinks...";
+            $reply .= "\nWe let the user know";
+        } catch {
+            $reply .= "\nSomehow we couldn't update the user, though, maybe they shut down their bot chat";
+        };
+
+        return $reply;
+
     }
     elsif ( $command eq 'users' ) {
 
