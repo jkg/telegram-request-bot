@@ -342,9 +342,7 @@ sub _admin_command {
         use DDP; p $msg;
 
         try {
-            warn "we are in the try block";
             $self->sendMessage($msg);
-            warn "TODO: called sendMessage, whatever the test suite thinks...";
             $reply .= "\nWe let the user know";
         } catch {
             $reply .= "\nSomehow we couldn't update the user, though, maybe they shut down their bot chat";
