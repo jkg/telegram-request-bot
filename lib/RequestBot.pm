@@ -339,8 +339,6 @@ sub _admin_command {
                 . "\n\nIf you still need assistance or updates, please raise a new request."
         };
 
-        use DDP; p $msg;
-
         try {
             $self->sendMessage($msg);
             $reply .= "\nWe let the user know";
