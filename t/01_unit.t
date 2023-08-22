@@ -101,7 +101,9 @@ subtest 'dispatching' => sub {
         is $forwarded, 0, '... and we did not try to forward';
     };
 
-    subtest 'forwards are not supported' => sub {
+    subtest 'forwards are only supported if the forwarder is admin' => sub {
+        
+        $forwarded = 0;
         my $msg = _new_msg( 
             forward_from => 'someone else',
             chat => _new_private_chat(),
@@ -109,7 +111,16 @@ subtest 'dispatching' => sub {
         );
 
         $bot->_dispatch($msg);
-        like $msg->_reply, qr/don't forward/, 'Bot does not like forward';
+        like $msg->_reply, qr/don't forward/, 'Bot does not like forward from just anybody';
+        is $forwarded, 0, 'And does not call _forward_and_reply';
+
+        $msg->{user} = _user_from_tgid( 34 ); # forwarder
+        $msg->{forward_from} = _user_from_tgid( 12 ); # originator
+
+        $bot->_dispatch($msg);
+
+        is $msg->_reply, '1', 'Bot treats the message as non-forwarded messages from originator';
+
     };
 
     subtest 'command: /whereami' => sub {
@@ -237,6 +248,25 @@ subtest 'testing forward_and_reply' => sub {
         is $sent, 1, '...and sent the request to the target chat';
 
         like $sent_text, qr/$close_command/, "...and the target chat gets the correct resolution command";
+    };
+
+    subtest 'forwarded message by admin' => sub {
+        my $msg = _new_msg( 
+            from => _user_from_tgid( 34 ), # admin
+            forward_from => _user_from_tgid( 12 ), # originator
+            text => q{some text we sent to the wrong person},
+        );
+
+        my $user = ResultSet('User')->find(1);
+
+        $sent = 0;
+
+        my $reply = $bot->_forward_and_reply( $msg, $user );
+        like $reply, qr /thanks again/, 'Bot replies to the forwarded message correctly, in this one weird case';
+
+        is $sent, 1, '...and the message was passed on';
+
+        $sent = 0;
     };
 
     $mock_bot->reset('sendMessage'); # put it back how we found it
