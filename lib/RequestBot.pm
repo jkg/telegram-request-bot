@@ -285,7 +285,7 @@ sub _admin_command {
 
             my $content_display =
                 ( length( $q->text ) > $max_q_length )
-              ? ( substr $q->text, 0, $max_q_length ) . "..."
+              ? ( substr $q->text, 0, $max_q_length ) . "... Click to show in full: " . "/showrequest_" . $id_display
               : $q->text;
 
             push @reply_parts,

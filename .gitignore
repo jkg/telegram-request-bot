@@ -4,3 +4,4 @@ requestbot.db.*
 logs/*
 logs/.*
 sql/9*
+devnotes/*
