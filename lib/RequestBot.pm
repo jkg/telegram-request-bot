@@ -56,12 +56,7 @@ sub init {
     }
 
     if ( !$self->google_api and $self->sheet_id and -e 'sheets-access.json' ) {
-        my $service_account = Google::RestApi::Auth::ServiceAccount->new(
-            account_file => 'sheets-access.json',
-            scope => ['https://www.googleapis.com/auth/spreadsheets']
-        );
-        $self->google_api( GoogleApi->new( auth => $service_account ) );
-        $self->sheets_api( SheetsApi->new( api => $self->google_api ) );
+        $self->_connect_sheet;
     }
 
     if ( !$self->logger ) {
@@ -161,6 +156,14 @@ sub _dispatch {
                 ->first->telegram_username
             . " to access your data, or to have it updated/removed";
     }
+
+    # setsheetid needs to be a special case, since it takes something other than a plain integer as the argument
+    elsif ( $text =~ m{
+        ^/setsheetid\      # literal space, just for fun
+        ([a-zA-Z0-9\-_]+)$  # the sheet ID
+    }ix ) {
+        $reply = $self->_admin_command($update, $sender, 'setsheetid', $1);
+    } 
 
     elsif ( $text =~ m{
         ^
@@ -511,6 +514,34 @@ sub _admin_command {
         return $reply;
 
     }
+    elsif ( $command eq 'setsheetid' ) {
+
+        my $sheet_id = $id;
+
+        my $reply;
+        try {
+
+            my $config = Config::JSON->new( 'config.json' );
+            $config->set( sheet_id => $sheet_id );
+
+            $self->sheet_id( $sheet_id );
+
+            if ( -e 'sheets-access.json' ) {
+                $self->_connect_sheet;
+                $reply = "OK, I will now use the Google Sheet with ID $sheet_id";
+            } else {
+                $reply = "I don't seem to have any Google API credentials - so I can't do that yet, sorry!";
+            }
+
+        } catch {
+
+            $reply = "I couldn't update my config file, sorry";
+
+        };
+
+        return $reply;
+
+    }
     else {
         return "Sorry, I didn't catch that, do you need /help?";
 
@@ -647,6 +678,28 @@ sub _sheets_update_row {
         $self->logger->error( "Failed to update row in Google Sheet: $_" );
         return;
     }
+}
+
+=head2 _connect_sheet
+
+If a sheet_id is provided, or a new one is given to us by an admin, ensure that we set up all the google
+API things. We don't set this up on init by default, since the feature is optional.
+
+=cut
+
+sub _connect_sheet {
+    my $self = shift;
+
+    return unless -e 'sheets-access.json';
+
+    my $service_account = Google::RestApi::Auth::ServiceAccount->new(
+        account_file => 'sheets-access.json',
+        scope => ['https://www.googleapis.com/auth/spreadsheets']
+    );
+    $self->google_api( GoogleApi->new( auth => $service_account ) );
+    $self->sheets_api( SheetsApi->new( api => $self->google_api ) );
+
+    return 1;
 
 }
 
