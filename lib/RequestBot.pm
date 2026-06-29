@@ -603,7 +603,7 @@ sub _sheets_add_row {
         $ws->row( $row, [
             $rq->id, 
             $update->from->username,
-            $update->text,
+            "'" . $update->text,
             DateTime->from_epoch( epoch => $rq->received )->format_cldr("yyyy-MM-dd HH:mm"),
             "OPEN"
         ] );
