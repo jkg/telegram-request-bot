@@ -1,6 +1,8 @@
 #!/bin/bash
 
-DATABASE=requestbot.db
+# Usage: create_new_db.sh [DB_PATH]
+# DB_PATH defaults to requestbot.db if not supplied.
+DATABASE=${1:-requestbot.db}
 
 EPOCH=$(date +%s)
 if [ -e "$DATABASE" ]

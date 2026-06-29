@@ -5,3 +5,6 @@ logs/*
 logs/.*
 sql/9*
 devnotes/*
+customers/*
+data/*
+logs/*

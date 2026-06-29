@@ -122,6 +122,16 @@ subtest 'dispatching' => sub {
         like $msg->_reply, qr/This is -5/, 'Bot responds with chat id';
     };
 
+    subtest 'last_update_time is updated on dispatch' => sub {
+        my $before = time();
+        my $msg = _new_msg(
+            chat => _new_private_chat( id => 1 ),
+            text => q{/whereami}
+        );
+        $bot->_dispatch($msg);
+        ok $bot->last_update_time >= $before, 'last_update_time was set after dispatch';
+    };
+
     for my $command (qw/ help start /) {
         subtest qq{command: /$command} => sub {
             my $msg = _new_msg( text => qq{/$command} );
@@ -456,10 +466,16 @@ EOF
         );
 
         my $config_change_count = 0;
+        my $config_path_used;
         my $mock_config = mock 'Config::JSON' => (
             track => 1,
             override => [
-                set => sub { ++$config_change_count }
+                new => sub {
+                    my ($class, $path) = @_;
+                    $config_path_used = $path;
+                    return bless {}, $class;
+                },
+                set => sub { ++$config_change_count },
             ]
         );
 
@@ -474,6 +490,7 @@ EOF
         is $bot->target_chat_id, 234, "And it correctly updates the target chat";
         is $sent, 1, "And it sends the old-chat notifications";
         is $config_change_count, 1, "And it wrote to the config file";
+        is $config_path_used, $bot->config_path, "And it used the bot's own config_path";
         
     };
 

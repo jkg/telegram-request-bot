@@ -26,6 +26,87 @@ This is a Telegram bot that collects user requests and forwards
 them into a designated group chat, where its administrative users can track
 them, process them and then respond to the requestor when appropriate.
 
+This distribution supports two runtime modes:
+
+=over
+
+=item * Multi-tenant mode
+
+Run multiple bots from one process. Each bot has its own config file under
+C<customers/>, database under C<data/>, and log file under C<logs/>.
+
+=item * Compatibility mode
+
+Run one legacy bot from a single C<config.json> file.
+
+=back
+
+=head1 SYNOPSIS
+
+=head2 Multi-tenant startup
+
+Create one config file per customer, for example C<customers/acme.json>:
+
+    {
+      "token": "<telegram token>",
+      "target_chat_id": -1001234567890
+    }
+
+Then create the matching database file and start all bots:
+
+    bash bin/create_new_db.sh data/acme.db
+    perl bin/bot.pl
+
+The bot name is derived from the filename stem. For example,
+C<customers/acme.json> maps to C<data/acme.db> and C<logs/acme.log>.
+
+=head2 Compatibility-mode startup
+
+Use the legacy single-config workflow:
+
+    perl bin/bot.pl config.json
+
+Where C<config.json> contains:
+
+    {
+      "token": "<telegram token>",
+      "target_chat_id": -1001234567890
+    }
+
+=head1 MIGRATION
+
+To migrate an existing single-bot installation:
+
+=over
+
+=item 1.
+
+Stop the old bot process.
+
+=item 2.
+
+Pick a customer name, for example C<acme>.
+
+=item 3.
+
+Create C<customers/acme.json> with the current token and target chat ID.
+
+=item 4.
+
+Copy the existing database to C<data/acme.db>.
+
+=item 5.
+
+Start the new manager process:
+
+    perl bin/bot.pl
+
+=back
+
+During transition, you can still run the old style command:
+
+    perl bin/bot.pl config.json
+
 =head1 ATTRIBUTES
 
 =cut
@@ -37,6 +118,10 @@ has 'logger';
 has 'google_api';
 has 'sheets_api';
 has 'sheet_id';
+has 'db_path'         => 'requestbot.db';
+has 'log_path'        => 'logs/squawk.log';
+has 'config_path'     => 'config.json';
+has 'last_update_time' => 0;
 
 =head1 METHODS
 
@@ -51,7 +136,7 @@ sub init {
 
     if ( !$self->schema ) {
         $self->schema( RequestBot::Schema->connect(
-        	'dbi:SQLite:requestbot.db', '', '', { sqlite_unicode => 1 })
+            'dbi:SQLite:' . $self->db_path, '', '', { sqlite_unicode => 1 })
         ) or die "Couldn't open database file, sorry.";
     }
 
@@ -68,7 +153,7 @@ sub init {
                     [
                         FileRotate =>
                             min_level   => 'info',
-                            filename    => 'logs/squawk.log',
+                            filename    => $self->log_path,
                             TZ          => 'UTC',
                             DatePattern => 'yyyy-MM-dd',
                             min_level   => 'info',
@@ -107,6 +192,8 @@ a response, but does not return anything.
 sub _dispatch {
     my $self   = shift;
     my $update = shift;
+
+    $self->last_update_time( time() );
 
     my $sender;
 
@@ -501,7 +588,7 @@ sub _admin_command {
         my $reply;
         try {
 
-            my $config = Config::JSON->new( 'config.json' );
+            my $config = Config::JSON->new( $self->config_path );
             $config->set( target_chat_id => $update->chat->id );
 
             $self->target_chat_id( $update->chat->id );
