@@ -347,7 +347,10 @@ sub _admin_command {
         my $reply;
         try {
             $q->update( { responded => 1 } );
-            $self->_sheets_update_row( $self->_sheets_find_row_by_request_id($id), "CLOSED" );
+            my $row = $self->_sheets_find_row_by_request_id($id);
+            if ( defined $row and $row > 0 ) {
+                $self->_sheets_update_row( $row, "CLOSED" );
+            }
             $reply = "OK, I marked request $id as resolved";
         }
         catch {
@@ -634,6 +637,7 @@ sub _sheets_find_row_by_request_id {
     my $iterator = $ws->range("A")->iterator(dim => 'col');
     my $row = 1;
     while( my $cell = $iterator->next ) {
+        no warnings 'numeric';
         last unless defined $cell->values();
         my $value = $cell->values();
         if ( $value == $request_id ) {
@@ -660,6 +664,8 @@ sub _sheets_update_row {
     my $self = shift;
     my $row = shift;
     my $new_status = shift;
+
+    return unless defined $row;
 
     return unless ( $self->sheets_api and $self->sheet_id );
     my $ws = $self->sheets_api->open_spreadsheet( id => $self->sheet_id )->open_worksheet( id => 0 )
