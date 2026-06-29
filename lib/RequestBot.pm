@@ -115,16 +115,13 @@ has 'schema';
 has 'token';
 has 'target_chat_id';
 has 'logger';
-<<<<<<< HEAD
 has 'google_api';
 has 'sheets_api';
 has 'sheet_id';
-=======
 has 'db_path'         => 'requestbot.db';
 has 'log_path'        => 'logs/squawk.log';
 has 'config_path'     => 'config.json';
 has 'last_update_time' => 0;
->>>>>>> d5ec9b0 (feat: add multi-tenant bot manager and customer config support)
 
 =head1 METHODS
 
