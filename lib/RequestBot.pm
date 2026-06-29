@@ -4,11 +4,16 @@ use Mojo::Base 'Telegram::Bot::Brain';
 use DateTime;
 use URI::Encode qw|uri_encode|;
 
+use aliased 'Google::RestApi' => 'GoogleApi';
+use aliased 'Google::RestApi::SheetsApi4' => 'SheetsApi';
+use Google::RestApi::Auth::ServiceAccount;
+
 use Config::JSON;
 
 use Log::Dispatch;
 
 use RequestBot::Schema;
+
 use Try::Tiny;
 
 =head1 NAME
@@ -29,6 +34,9 @@ has 'schema';
 has 'token';
 has 'target_chat_id';
 has 'logger';
+has 'google_api';
+has 'sheets_api';
+has 'sheet_id';
 
 =head1 METHODS
 
@@ -45,6 +53,10 @@ sub init {
         $self->schema( RequestBot::Schema->connect(
         	'dbi:SQLite:requestbot.db', '', '', { sqlite_unicode => 1 })
         ) or die "Couldn't open database file, sorry.";
+    }
+
+    if ( !$self->google_api and $self->sheet_id and -e 'sheets-access.json' ) {
+        $self->_connect_sheet;
     }
 
     if ( !$self->logger ) {
@@ -145,6 +157,14 @@ sub _dispatch {
             . " to access your data, or to have it updated/removed";
     }
 
+    # setsheetid needs to be a special case, since it takes something other than a plain integer as the argument
+    elsif ( $text =~ m{
+        ^/setsheetid\      # literal space, just for fun
+        ([a-zA-Z0-9\-_]+)$  # the sheet ID
+    }ix ) {
+        $reply = $self->_admin_command($update, $sender, 'setsheetid', $1);
+    } 
+
     elsif ( $text =~ m{
         ^
         /([a-z]+)        # /command
@@ -211,6 +231,10 @@ sub _forward_and_reply {
                 . $update->text . "\n\n"
                 . "Resolve using: /close_" . $rq->id
         };
+
+        if ( $self->sheets_api ) {
+            $self->_sheets_add_row($rq, $update);
+        }
 
         $self->sendMessage($msg);
 
@@ -323,7 +347,10 @@ sub _admin_command {
         my $reply;
         try {
             $q->update( { responded => 1 } );
-
+            my $row = $self->_sheets_find_row_by_request_id($id);
+            if ( defined $row and $row > 0 ) {
+                $self->_sheets_update_row( $row, "CLOSED" );
+            }
             $reply = "OK, I marked request $id as resolved";
         }
         catch {
@@ -490,10 +517,196 @@ sub _admin_command {
         return $reply;
 
     }
+    elsif ( $command eq 'setsheetid' ) {
+
+        my $sheet_id = $id;
+
+        my $reply;
+        try {
+
+            my $config = Config::JSON->new( 'config.json' );
+            $config->set( sheet_id => $sheet_id );
+
+            $self->sheet_id( $sheet_id );
+
+            if ( -e 'sheets-access.json' ) {
+                $self->_connect_sheet;
+                $reply = "OK, I will now use the Google Sheet with ID $sheet_id";
+            } else {
+                $reply = "I don't seem to have any Google API credentials - so I can't do that yet, sorry!";
+            }
+
+        } catch {
+
+            $reply = "I couldn't update my config file, sorry";
+
+        };
+
+        return $reply;
+
+    }
     else {
         return "Sorry, I didn't catch that, do you need /help?";
 
     }
+}
+
+=head2 _sheets_first_blank_row
+
+Utility method to find a row number of the first blank row in the associated Google Sheet.
+
+=cut
+
+sub _sheets_first_blank_row {
+
+    my $self = shift;
+
+    return unless ( $self->sheets_api and $self->sheet_id );
+
+    my $ws = $self->sheets_api->open_spreadsheet( id => $self->sheet_id )->open_worksheet( id => 0 )
+        or return;
+    
+    my $iterator = $ws->range("A")->iterator(dim => 'col');
+    my $row = 1;
+    while( my $cell = $iterator->next ) {
+        last unless defined $cell->values();
+        $row++;
+    }
+
+    return $row;
+
+}
+
+=head2 _sheets_add_row
+
+Utility method to add a row to the associated Google Sheet. Uses _sheets_first_blank_row to find the next available row.
+
+Returns the row number added, or undef if it failed.
+
+=cut
+
+sub _sheets_add_row {
+
+    my $self = shift;
+    my $rq = shift;
+    my $update = shift;
+
+    return unless ( $self->sheets_api and $self->sheet_id );
+
+    my $ws = $self->sheets_api->open_spreadsheet( id => $self->sheet_id )->open_worksheet( id => 0 )
+        or return;
+
+    my $row = $self->_sheets_first_blank_row;
+    return unless defined $row;
+
+    try { 
+        my $sheet = $self->sheets_api->open_spreadsheet( id => $self->sheet_id );
+        my $ws = $sheet->open_worksheet( id => 0 );
+
+        $ws->row( $row, [
+            $rq->id, 
+            $update->from->username,
+            "'" . $update->text,
+            DateTime->from_epoch( epoch => $rq->received )->format_cldr("yyyy-MM-dd HH:mm"),
+            "OPEN"
+        ] );
+
+    } catch {
+        $self->logger->error( "Failed to append row to Google Sheet: $_" );
+        return;
+    };
+
+}
+
+=head2 _sheets_find_row_by_request_id
+
+Utility method to find a row number in the associated Google Sheet by request ID. Returns the row number, or undef if not found.
+
+=cut
+
+sub _sheets_find_row_by_request_id {
+
+    my $self = shift;
+    my $request_id = shift;
+
+    return unless ( $self->sheets_api and $self->sheet_id );
+
+    my $ws = $self->sheets_api->open_spreadsheet( id => $self->sheet_id )->open_worksheet( id => 0 )
+        or return;
+
+    my $iterator = $ws->range("A")->iterator(dim => 'col');
+    my $row = 1;
+    while( my $cell = $iterator->next ) {
+        no warnings 'numeric';
+        last unless defined $cell->values();
+        my $value = $cell->values();
+        if ( $value == $request_id ) {
+            return $row;
+        }
+        $row++;
+    }
+
+    return;
+
+}
+
+=head2 _sheets_update_row
+
+Utility method to update a row in the associated Google Sheet.
+
+
+=cut
+
+sub _sheets_update_row {
+    
+    # temporary stub, we only need this for updating the status of a request, so will just take the request ID and new status for now
+
+    my $self = shift;
+    my $row = shift;
+    my $new_status = shift;
+
+    return unless defined $row;
+
+    return unless ( $self->sheets_api and $self->sheet_id );
+    my $ws = $self->sheets_api->open_spreadsheet( id => $self->sheet_id )->open_worksheet( id => 0 )
+        or return;
+
+    try {
+        my $cell = $ws->range_cell( { col => 5, row => $row } ); # column E, which is the status column
+        if ( $cell->values() eq 'OPEN' ) {
+            $cell->values( values => 'CLOSED' );
+            return 1;
+        } else {
+            $self->logger->error( "Attempted to update Google Sheet row $row, but status was not OPEN" );
+            return;
+        }
+    } catch {
+        $self->logger->error( "Failed to update row in Google Sheet: $_" );
+        return;
+    }
+}
+
+=head2 _connect_sheet
+
+If a sheet_id is provided, or a new one is given to us by an admin, ensure that we set up all the google
+API things. We don't set this up on init by default, since the feature is optional.
+
+=cut
+
+sub _connect_sheet {
+    my $self = shift;
+
+    return unless -e 'sheets-access.json';
+
+    my $service_account = Google::RestApi::Auth::ServiceAccount->new(
+        account_file => 'sheets-access.json',
+        scope => ['https://www.googleapis.com/auth/spreadsheets']
+    );
+    $self->google_api( GoogleApi->new( auth => $service_account ) );
+    $self->sheets_api( SheetsApi->new( api => $self->google_api ) );
+
+    return 1;
+
 }
 
 =head1 SEE ALSO

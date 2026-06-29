@@ -11,5 +11,5 @@ my $config = Config::JSON->new('config.json');
 
 RequestBot->new(
     map { $_ => $config->get($_) }
-      qw|token target_chat_id|
+      qw|token target_chat_id sheet_id|
 )->think;
